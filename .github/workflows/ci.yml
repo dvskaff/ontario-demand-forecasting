@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: |
+          ruff check src serving tests
+          ruff format --check src serving tests
+
+      - name: Tests (leakage, feature parity, models, ONNX parity, API, multi-day production runs)
+        run: pytest -q
+
+      # Build the API image around a model trained on synthetic data and check that it actually serves forecasts.
+      - name: Build a test model bundle
+        run: python -m demand.pipeline --fixture
+        env:
+          PYTHONPATH: src
+          DEMAND_BUNDLE_DIR: ${{ github.workspace }}/serving/model
+
+      - name: Build and smoke-test the API image
+        run: |
+          docker build -t ontario-demand-api:ci .
+          docker run -d --name api -p 8000:8000 ontario-demand-api:ci
+          for i in $(seq 30); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf localhost:8000/forecast/example \
+            | curl -sf -X POST localhost:8000/forecast -H 'Content-Type: application/json' -d @- > forecast.json
+          python -c "import json; h=json.load(open('forecast.json'))['hours']; assert len(h)==24 and all(x['p10']<=x['p50']<=x['p90'] for x in h); print('API OK:', h[0])"
+          docker logs api
