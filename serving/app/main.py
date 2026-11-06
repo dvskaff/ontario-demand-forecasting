@@ -16,13 +16,12 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import numpy as np
 import onnxruntime as ort
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from demand.features import FEATURES, HISTORY_HOURS, inference_features, to_matrix
+from demand.features import FEATURES, HISTORY_HOURS, inference_features, to_demand, to_matrix
 
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", Path(__file__).resolve().parents[1] / "model"))
 STATE: dict = {}
@@ -68,6 +67,10 @@ def load(model_dir: Path | None = None) -> None:
     if meta["features"] != FEATURES:
         raise RuntimeError("Model was trained with a different feature list than this API builds")
     STATE["meta"] = meta
+    STATE["spec"] = {
+        "target": meta.get("target", "absolute"),
+        "interval_adjust_mw": meta.get("interval_adjust_mw", 0.0),
+    }
     STATE["sessions"] = {q: ort.InferenceSession(str(model_dir / f"{q}.onnx"), providers=["CPUExecutionProvider"])
                          for q in ("p10", "p50", "p90")}  # fmt: skip
     example = model_dir / "example_request.json"
@@ -112,8 +115,8 @@ def forecast(req: ForecastRequest) -> ForecastResponse:
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     X = to_matrix(feats)
-    preds = np.sort(np.column_stack([STATE["sessions"][q].run(None, {"features": X})[0].ravel()
-                                     for q in ("p10", "p50", "p90")]), axis=1)  # fmt: skip
+    raw = {q: STATE["sessions"][q].run(None, {"features": X})[0].ravel() for q in ("p10", "p50", "p90")}
+    preds = to_demand(raw, feats, STATE["spec"])  # same output transform as training
     hours = [ForecastHour(ts=ts, hour_ending=ts.hour + 1, p10=round(float(a), 1), p50=round(float(b), 1),
                           p90=round(float(c), 1)) for ts, (a, b, c) in zip(feats.index, preds, strict=True)]  # fmt: skip
     return ForecastResponse(date=req.date, model_version=STATE["meta"]["version"], hours=hours)

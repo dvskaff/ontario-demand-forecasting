@@ -85,7 +85,11 @@ def drift(features: pd.DataFrame, end: pd.Timestamp, days: int, html_path: Path 
         from evidently import Report
         from evidently.presets import DataDriftPreset
 
-        snap = Report([DataDriftPreset()]).run(cur.reset_index(drop=True), ref.reset_index(drop=True))
+        # Wasserstein distance (normed by the reference's spread) instead of K-S p-values: with hundreds of hourly,
+        # autocorrelated rows a K-S test flags even trivial differences.
+        snap = Report([DataDriftPreset(num_method="wasserstein", num_threshold=0.1)]).run(
+            cur.reset_index(drop=True), ref.reset_index(drop=True)
+        )
         if html_path:
             html_path.parent.mkdir(parents=True, exist_ok=True)
             snap.save_html(str(html_path))

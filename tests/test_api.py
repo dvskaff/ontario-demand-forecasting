@@ -14,7 +14,9 @@ def client(rows, frame, tmp_path_factory):
     models = M.fit(rows[rows.index < "2024-03-01"])
     for q, blob in M.to_onnx(models).items():
         (d / f"{M.QCOLS[q]}.onnx").write_bytes(blob)
-    (d / "metadata.json").write_text(json.dumps({"version": "7", "features": FEATURES}))
+    spec = {**M.SPEC, "interval_adjust_mw": 25.0}
+    (d / "model.json").write_text(json.dumps(spec))
+    (d / "metadata.json").write_text(json.dumps({"version": "7", "features": FEATURES, **spec}))
     import app.main as api
 
     api.MODEL_DIR = d
@@ -47,6 +49,10 @@ def test_forecast_matches_offline_model(client, frame):
     hist = frame[(frame.index < t) & (frame.index >= t - pd.Timedelta(hours=HISTORY_HOURS))]
     offline = onnx.predict(inference_features(hist, t.date(), body["temperature_c"]))
     assert abs(offline["p50"].to_numpy() - [h["p50"] for h in hours]).max() < 0.1
+    assert (
+        abs(offline["p90"].to_numpy() - [h["p90"] for h in hours]).max() < 0.1
+    )  # calibration applied the same way
+    assert 10_000 < hours[12]["p50"] < 25_000  # MW, not a ratio
 
 
 def test_forecast_validation_errors(client, frame):

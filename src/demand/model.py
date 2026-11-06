@@ -9,7 +9,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .features import FEATURES, TARGET, to_matrix
+from .features import FEATURES, LEVEL, TARGET, to_demand, to_matrix
 
 log = logging.getLogger(__name__)
 PARAMS = dict(learning_rate=0.05, num_leaves=31, min_data_in_leaf=40, feature_fraction=0.9, bagging_fraction=0.9,
@@ -18,22 +18,39 @@ ROUNDS = 600
 QCOLS = {0.1: "p10", 0.5: "p50", 0.9: "p90"}
 
 
+SPEC = {
+    "target": "ratio_to_recent_level"
+}  # how this code's models map outputs to MW (see features.to_demand)
+
+
 def fit(rows: pd.DataFrame, quantiles=(0.1, 0.5, 0.9), seed: int = 42) -> dict[float, lgb.Booster]:
-    X, y = to_matrix(rows), rows[TARGET].to_numpy()
+    """One LightGBM per quantile, trained on demand divided by its recent level."""
+    X, y = to_matrix(rows), (rows[TARGET] / rows[LEVEL]).to_numpy()
     return {
         q: lgb.train({**PARAMS, "objective": "quantile", "alpha": q, "seed": seed}, lgb.Dataset(X, y), ROUNDS)
         for q in quantiles
     }
 
 
-def _frame(preds: dict[float, np.ndarray], index) -> pd.DataFrame:
-    p = np.sort(np.column_stack([preds[q] for q in sorted(preds)]), axis=1)  # no crossing quantiles
-    return pd.DataFrame(p, index=index, columns=[QCOLS[q] for q in sorted(preds)])
+def _frame(raw: dict[str, np.ndarray], feats: pd.DataFrame, spec: dict) -> pd.DataFrame:
+    return pd.DataFrame(to_demand(raw, feats, spec), index=feats.index, columns=["p10", "p50", "p90"])
 
 
-def predict(models: dict[float, lgb.Booster], feats: pd.DataFrame) -> pd.DataFrame:
+def predict(
+    models: dict[float, lgb.Booster], feats: pd.DataFrame, interval_adjust: float = 0.0
+) -> pd.DataFrame:
     X = to_matrix(feats)
-    return _frame({q: m.predict(X) for q, m in models.items()}, feats.index)
+    raw = {QCOLS[q]: m.predict(X) for q, m in models.items()}
+    return _frame(raw, feats, {**SPEC, "interval_adjust_mw": interval_adjust})
+
+
+def conformal_adjust(y: pd.Series, pred: pd.DataFrame, coverage: float = 0.8) -> float:
+    """Conformalized quantile regression: how much to widen (or narrow) the p10-p90 band so that, on out-of-sample
+    backtest forecasts, it contains the truth `coverage` of the time."""
+    yv = y.loc[pred.index].to_numpy(dtype=float)
+    scores = np.maximum(pred["p10"].to_numpy() - yv, yv - pred["p90"].to_numpy())
+    n = len(scores)
+    return float(np.quantile(scores, min(1.0, np.ceil((n + 1) * coverage) / n)))
 
 
 # --------------------------------------------------------------------------- metrics
@@ -65,25 +82,27 @@ def baseline(feats: pd.DataFrame, name: str) -> pd.DataFrame:
     return pd.DataFrame({"p50": feats[BASELINES[name]].to_numpy()}, index=feats.index)
 
 
-def backtest(rows: pd.DataFrame, folds: int, seed: int = 42, min_train_days: int = 365) -> pd.DataFrame:
+def backtest(
+    rows: pd.DataFrame, folds: int, seed: int = 42, min_train_days: int = 365
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Rolling-origin evaluation: for each of the last `folds` complete months, train on everything before the month
-    and forecast every day of it (with observed temperatures, so this is a best case for the weather input)."""
+    and forecast every day of it (with observed temperatures, so this is a best case for the weather input).
+    Returns the per-month table and the model's out-of-sample forecasts (used for interval calibration)."""
     months = pd.Index(rows.index.to_period("M").unique()).sort_values()
     last_complete = months[-2] if rows.index.max().day < 28 else months[-1]
-    out = []
+    out, oos = [], []
     for m in [p for p in months if p <= last_complete][-folds:]:
         start, end = m.start_time, m.end_time
         train, test = rows[rows.index < start], rows[(rows.index >= start) & (rows.index <= end)]
         if (train.index.max() - train.index.min()).days < min_train_days or test.empty:
             continue
-        models = fit(train, seed=seed)
-        out.append(
-            {"month": str(m), "model": "LightGBM (quantile)", **metrics(test[TARGET], predict(models, test))}
-        )
+        pred = predict(fit(train, seed=seed), test)
+        oos.append(pred.assign(actual=test[TARGET]))
+        out.append({"month": str(m), "model": "LightGBM (quantile)", **metrics(test[TARGET], pred)})
         for name in BASELINES:
             out.append({"month": str(m), "model": name, **metrics(test[TARGET], baseline(test, name))})
         log.info("Backtest %s: MAPE %.2f%%", m, out[-3]["mape"])
-    return pd.DataFrame(out)
+    return pd.DataFrame(out), pd.concat(oos) if oos else pd.DataFrame()
 
 
 def importance(models: dict[float, lgb.Booster]) -> pd.DataFrame:
@@ -110,28 +129,33 @@ def to_onnx(models: dict[float, lgb.Booster]) -> dict[float, bytes]:
 
 
 class OnnxModels:
-    """The three quantile models as onnxruntime sessions (what the API and the champion checks use)."""
+    """The three quantile models as onnxruntime sessions (what the API and the champion checks use), plus the output
+    spec saved next to them (model.json). Older versions without one predicted absolute MW."""
 
-    def __init__(self, blobs: dict[float, bytes]):
+    def __init__(self, blobs: dict[float, bytes], spec: dict | None = None):
         import onnxruntime as ort
 
         self.sessions = {
             q: ort.InferenceSession(b, providers=["CPUExecutionProvider"]) for q, b in blobs.items()
         }
+        self.spec = spec or {"target": "absolute"}
 
     @classmethod
     def from_dir(cls, path) -> OnnxModels:
+        import json
         from pathlib import Path
 
-        return cls({q: (Path(path) / f"{c}.onnx").read_bytes() for q, c in QCOLS.items()})
+        spec_file = Path(path) / "model.json"
+        spec = json.loads(spec_file.read_text()) if spec_file.exists() else None
+        return cls({q: (Path(path) / f"{c}.onnx").read_bytes() for q, c in QCOLS.items()}, spec)
 
     def predict(self, feats: pd.DataFrame) -> pd.DataFrame:
         X = to_matrix(feats)
-        return _frame(
-            {q: s.run(None, {"features": X})[0].ravel() for q, s in self.sessions.items()}, feats.index
-        )
+        raw = {QCOLS[q]: s.run(None, {"features": X})[0].ravel() for q, s in self.sessions.items()}
+        return _frame(raw, feats, self.spec)
 
 
 def parity(models: dict[float, lgb.Booster], onnx: OnnxModels, feats: pd.DataFrame) -> float:
     """Largest difference (MW) between LightGBM and the exported ONNX models on the same rows."""
-    return float((predict(models, feats) - onnx.predict(feats)).abs().to_numpy().max())
+    adj = float(onnx.spec.get("interval_adjust_mw", 0.0))
+    return float((predict(models, feats, adj) - onnx.predict(feats)).abs().to_numpy().max())

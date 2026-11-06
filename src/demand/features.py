@@ -99,3 +99,22 @@ def inference_features(history: pd.DataFrame, target_day: date, temps: list[floa
 
 def to_matrix(features: pd.DataFrame) -> np.ndarray:
     return features[FEATURES].to_numpy(dtype=np.float32)
+
+
+# --------------------------------------------------------------------------- model output -> MW
+# Models predict demand relative to its recent level (same hour, last 7 days), which keeps them accurate when the
+# overall level of demand drifts up or down; a tree model trained on absolute MW cannot extrapolate a new level.
+# The 80% interval is then widened (or narrowed) by a conformal adjustment learned from backtest errors.
+# Shared by training and the API so both turn model outputs into MW the same way.
+LEVEL = "same_hour_mean_7d"
+
+
+def to_demand(raw: dict[str, np.ndarray], features: pd.DataFrame, spec: dict | None = None) -> np.ndarray:
+    """raw: model outputs keyed p10/p50/p90 -> (n, 3) array in MW, sorted so quantiles never cross."""
+    spec = spec or {}
+    base = features[LEVEL].to_numpy(dtype=float) if spec.get("target") == "ratio_to_recent_level" else 1.0
+    p = np.column_stack([np.asarray(raw[k], dtype=float) * base for k in ("p10", "p50", "p90")])
+    adj = float(spec.get("interval_adjust_mw", 0.0))
+    p[:, 0] -= adj
+    p[:, 2] += adj
+    return np.sort(p, axis=1)

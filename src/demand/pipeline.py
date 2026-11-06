@@ -53,17 +53,18 @@ def retrain(cfg: Config, rows: pd.DataFrame, data_end: pd.Timestamp, champ: dict
     if champ and champ["tags"].get("data_end"):
         unseen = pd.Timestamp(champ["tags"]["data_end"]) + pd.Timedelta(days=1)
         gate_start = min(max(gate_start, unseen), data_end - pd.Timedelta(days=2))
+    bt, oos = M.backtest(rows, cfg.backtest_folds)
+    adjust = M.conformal_adjust(oos["actual"], oos) if len(oos) else 0.0  # conformal widening of the 80% band
     gate = rows[rows.index >= gate_start]
     earlier = rows[rows.index < gate_start]
     challenger_eval = M.fit(earlier)
-    gate_scores = {"challenger": M.metrics(gate[TARGET], M.predict(challenger_eval, gate)),
+    gate_scores = {"challenger": M.metrics(gate[TARGET], M.predict(challenger_eval, gate, adjust)),
                    "seasonal_naive": M.metrics(gate[TARGET], M.baseline(gate, "Same hour last week"))}  # fmt: skip
     if champ:
         gate_scores["champion"] = M.metrics(
             gate[TARGET], M.OnnxModels.from_dir(champ["onnx_dir"]).predict(gate)
         )
 
-    bt = M.backtest(rows, cfg.backtest_folds)
     overall = bt.groupby("model")[["mape", "mae", "peak_ape", "coverage_80"]].mean()
     beats_naive = overall.loc["LightGBM (quantile)", "mape"] < overall.loc["Same hour last week", "mape"]
     if champ is None:
@@ -86,6 +87,7 @@ def retrain(cfg: Config, rows: pd.DataFrame, data_end: pd.Timestamp, champ: dict
     onnx_dir.mkdir()
     for q, blob in M.to_onnx(final).items():
         (onnx_dir / f"{M.QCOLS[q]}.onnx").write_bytes(blob)
+    registry.write_json(onnx_dir / "model.json", {**M.SPEC, "interval_adjust_mw": adjust})
     diff = M.parity(final, M.OnnxModels.from_dir(onnx_dir), rows.tail(24 * 30))
     if diff > MAX_PARITY_MW:
         raise RuntimeError(f"ONNX export does not match LightGBM (max difference {diff:.3f} MW)")
@@ -100,6 +102,7 @@ def retrain(cfg: Config, rows: pd.DataFrame, data_end: pd.Timestamp, champ: dict
     for who, s in gate_scores.items():
         metrics |= {f"gate_{who}_mape": s["mape"], f"gate_{who}_mae": s["mae"]}
     metrics["onnx_parity_mw"] = diff
+    metrics["interval_adjust_mw"] = adjust
     params = {**{k: v for k, v in M.PARAMS.items() if k not in ("verbose", "num_threads")}, "rounds": M.ROUNDS,
               "quantiles": ",".join(map(str, cfg.quantiles)), "features": len(FEATURES)}  # fmt: skip
     tags = {"status": "champion" if promote else "rejected", "decision": why, "trigger": reason,
@@ -155,8 +158,10 @@ def write_bundle(cfg: Config, champ: dict, frame: pd.DataFrame, target: pd.Times
     b.mkdir(parents=True, exist_ok=True)
     meta_path = b / "metadata.json"
     before = json.loads(meta_path.read_text()).get("version") if meta_path.exists() else None
-    for f in Path(champ["onnx_dir"]).glob("*.onnx"):
+    for f in [*Path(champ["onnx_dir"]).glob("*.onnx"), *Path(champ["onnx_dir"]).glob("model.json")]:
         shutil.copy(f, b / f.name)
+    spec_file = Path(champ["onnx_dir"]) / "model.json"
+    spec = json.loads(spec_file.read_text()) if spec_file.exists() else {"target": "absolute"}
     hist = frame[(frame.index < target) & (frame.index >= target - pd.Timedelta(hours=HISTORY_HOURS))]
     example = {"date": str(target.date()),
                "history": [{"ts": ts.isoformat(), "demand_mw": float(r.demand_mw), "temp_c": round(float(r.temp_c), 2)}
@@ -167,7 +172,9 @@ def write_bundle(cfg: Config, champ: dict, frame: pd.DataFrame, target: pd.Times
     registry.write_json(meta_path, {"name": cfg.model_name, "version": champ["version"], "features": FEATURES,
                                     "quantiles": ["p10", "p50", "p90"], "data_end": champ["tags"].get("data_end"),
                                     "backtest_mape": m.get("backtest_mape"), "backtest_coverage_80": m.get("backtest_coverage_80"),
-                                    "timezone": "EST (UTC-5, no daylight saving)"})  # fmt: skip
+                                    "timezone": "EST (UTC-5, no daylight saving)",
+                                    "target": spec.get("target", "absolute"),
+                                    "interval_adjust_mw": spec.get("interval_adjust_mw", 0.0)})  # fmt: skip
     return before != champ["version"]
 
 

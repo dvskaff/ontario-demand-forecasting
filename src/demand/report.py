@@ -151,6 +151,7 @@ def build_site(cfg: Config, frame, fc, scored, daily, run: dict) -> dict:
     imp = pd.read_csv(f"{rep}/importance/importance.csv")
 
     peak = fc.loc[fc["p50"].idxmax()]
+    adjust = float(champ["metrics"].get("interval_adjust_mw", 0.0))
     overall = bt.groupby("model")[["mape", "mae", "peak_ape", "coverage_80"]].mean()
     model_bt, naive_bt = overall.loc["LightGBM (quantile)"], overall.loc["Same hour last week"]
     improvement = 1 - model_bt["mape"] / naive_bt["mape"]
@@ -163,7 +164,9 @@ def build_site(cfg: Config, frame, fc, scored, daily, run: dict) -> dict:
         _card("Live error (MAPE)", _p(live.get("mape")) if live.get("days") else "–",
               f"issued forecasts, last {live.get('days', 0)} days" if live.get("days") else "starts after the first scored day"),
         _card("Backtest MAPE", _p(model_bt["mape"]), f"{improvement:.0%} lower than same-hour-last-week ({_p(naive_bt['mape'])})"),
-        _card("80% interval coverage", _p(model_bt["coverage_80"], 0), "backtest; target 80%"),
+        _card("80% interval coverage", _p(live["coverage_80"], 0) if live.get("days", 0) >= 7 else _p(model_bt["coverage_80"], 0),
+              f"live, last {live['days']} days; target 80%" if live.get("days", 0) >= 7 else
+              f"backtest before calibration; band widened {adjust:+,.0f} MW each side"),
         _card("Champion model", f"v{champ['version']}", f"data through {champ['tags'].get('data_end')}"),
         _card("Input drift", f"{drift['drifted']}/{drift['n_columns']} columns" if drift.get("available") else "–",
               "vs. same weeks last year" if drift.get("available") else drift.get("reason", "")),
@@ -238,7 +241,10 @@ the weather forecast for that day. Grey shows earlier forecasts as they were iss
 each of the last {bt["month"].nunique()} months the model is retrained on everything before it and forecasts every day of the month
 using observed temperatures, a best case for the weather input. Both are compared with naive baselines.</p>
 <div class="grid2">{_div(fig_live(daily)) if len(daily) else "<p class='muted'>Live scores appear once the first forecast day has finished.</p>"}
-<div><h3>Backtest summary</h3>{_table(["Model", "MAPE", "MAE", "Daily peak error", "80% coverage"], bt_rows)}</div></div>
+<div><h3>Backtest summary</h3>{_table(["Model", "MAPE", "MAE", "Daily peak error", "80% coverage*"], bt_rows)}
+<p class="muted">*Before calibration. The champion's 80% band is then widened by {adjust:+,.0f} MW on each side
+(conformalized quantile regression on these backtest errors) so it should contain the truth about 80% of the time;
+live coverage shows whether it does.</p></div></div>
 <div class="grid2">{_div(fig_backtest(bt))}{_div(fig_importance(imp))}</div>
 </section>
 

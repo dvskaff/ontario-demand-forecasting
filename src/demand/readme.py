@@ -15,7 +15,7 @@ def results_block(s: dict) -> str:
         f"**Next-day forecast ({s['target_day']}):** peak {s['peak']['p50']:,.0f} MW at hour ending "
         f"{s['peak_hour_ending']}:00 EST (80% interval {s['peak']['p10']:,.0f}–{s['peak']['p90']:,.0f} MW)",
         "",
-        "| Accuracy | MAPE | Daily peak error | 80% interval coverage |",
+        "| Accuracy | MAPE | Daily peak error | 80% interval coverage* |",
         "|---|---|---|---|",
         f"| Backtest, LightGBM quantile ({b['months']} monthly folds) | {b['model']['mape']:.2f}% | "
         f"{b['model']['peak_ape']:.2f}% | {b['model']['coverage_80']:.0f}% |",
@@ -25,6 +25,10 @@ def results_block(s: dict) -> str:
     if live.get("days"):
         lines.append(f"| **Live**, issued forecasts, last {live['days']} days | {live['mape']:.2f}% | "
                      f"{live['peak_ape']:.2f}% | {live['coverage_80']:.0f}% |")  # fmt: skip
+    lines += [
+        "",
+        "_*Backtest coverage is before the conformal calibration of the interval; the live row is after._",
+    ]
     rt = s.get("retrain")
     lines += ["", f"**Registry:** {s['versions']} model version(s) in MLflow"
               + (f"; this run retrained ({rt['trigger']}): v{rt['version']} {'promoted' if rt['promoted'] else 'not promoted'}"
