@@ -1,0 +1,7 @@
+*
+!serving/requirements.txt
+!serving/app/
+!serving/model/
+!src/demand/__init__.py
+!src/demand/features.py
+**/__pycache__
