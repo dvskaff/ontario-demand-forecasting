@@ -36,7 +36,8 @@ def results_block(s: dict) -> str:
     d = s["drift"]
     if d.get("available"):
         lines[-1] += (
-            f" · **Drift (Evidently, vs. same weeks last year):** {d['drifted']} of {d['n_columns']} monitored columns drifted"
+            f" · **Inputs vs. same weeks last year (Evidently):** {d['drifted']} of {d['n_columns']} columns shifted"
+            + (f" ({d['note'][0].lower()}{d['note'][1:]})" if d.get("note") else "")
         )
     lines += ["", f"**API image:** `docker run -p 8000:8000 {s['image']}:latest`"]
     return "\n".join(lines)

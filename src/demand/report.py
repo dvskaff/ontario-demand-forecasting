@@ -39,6 +39,16 @@ def _p(v, d=2) -> str:
     return "–" if v is None or pd.isna(v) else f"{v:.{d}f}%"
 
 
+def drift_note(drift: dict) -> str:
+    """Plain-language size of the shift in temperature and demand (the two inputs that matter most)."""
+    if not drift.get("available"):
+        return drift.get("reason", "")
+    ref, cur = drift["reference_means"], drift["current_means"]
+    dt = cur["temp"] - ref["temp"]
+    dd = cur["demand_mw"] / ref["demand_mw"] - 1
+    return f"This period was {dt:+.1f} °C vs. last year, with demand {dd:+.1%}"
+
+
 def _mw(v) -> str:
     return "–" if v is None or pd.isna(v) else f"{v:,.0f} MW"
 
@@ -168,8 +178,8 @@ def build_site(cfg: Config, frame, fc, scored, daily, run: dict) -> dict:
               f"live, last {live['days']} days; target 80%" if live.get("days", 0) >= 7 else
               f"backtest before calibration; band widened {adjust:+,.0f} MW each side"),
         _card("Champion model", f"v{champ['version']}", f"data through {champ['tags'].get('data_end')}"),
-        _card("Input drift", f"{drift['drifted']}/{drift['n_columns']} columns" if drift.get("available") else "–",
-              "vs. same weeks last year" if drift.get("available") else drift.get("reason", "")),
+        _card("Inputs vs. last year", f"{drift['drifted']}/{drift['n_columns']} shifted" if drift.get("available") else "–",
+              drift_note(drift)),
     ])  # fmt: skip
 
     bt_rows = []
@@ -256,8 +266,9 @@ champion's (within {cfg.gate_tolerance - 1:.0%}). Every exported model must matc
 </section>
 
 <section><h2>Monitoring</h2>
-<p>Input drift (Evidently): the last {cfg.drift_days} days against the same weeks a year earlier, so normal seasonal
-change is not flagged. Live error is also watched: if the last week's error runs {cfg.live_alert_ratio:g}× the backtest
+<p>Input drift (Evidently, Wasserstein distance): the last {cfg.drift_days} days against the same weeks a year earlier,
+so ordinary seasonal change is not flagged. {html.escape(drift_note(drift))}. A shift is information, not a failure:
+weather differs from year to year, and retraining is driven by live forecast error. Live error is also watched: if the last week's error runs {cfg.live_alert_ratio:g}× the backtest
 error, the model is retrained early. Data checks this run: {_int(dq["rows"])} hourly rows,
 {dq["missing_hours"]} missing hours, {dq["out_of_range"]} out-of-range values removed.</p>
 {_table(["Column", "Test", "Score", "Threshold", "Status"], drift_rows) if drift_rows else "<p class='muted'>" + html.escape(drift.get("reason", "")) + "</p>"}
@@ -303,7 +314,8 @@ large industrial outages; the backtest uses observed temperatures, so live error
                      "improvement_vs_naive": float(improvement)},
         "champion": {"version": champ["version"], "data_end": champ["tags"].get("data_end")},
         "versions": len(versions), "retrain": {k: rt[k] for k in ("version", "promoted", "decision", "trigger")} if rt else None,
-        "drift": {k: drift.get(k) for k in ("available", "drifted", "n_columns", "drift_share")},
+        "drift": {**{k: drift.get(k) for k in ("available", "drifted", "n_columns", "drift_share")},
+                  "note": drift_note(drift)},
         "image": cfg.image, "synthetic": cfg.fixture, "built_at": built_at,
     }  # fmt: skip
     (site / "results.json").write_text(json.dumps(summary, indent=2, default=str))
