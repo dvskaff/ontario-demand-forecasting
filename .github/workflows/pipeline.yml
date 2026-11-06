@@ -108,7 +108,7 @@ jobs:
           git add README.md
           if ! git diff --staged --quiet; then
             git commit -m "Forecast for $(python -c 'import json;print(json.load(open("site/results.json"))["target_day"])')"
-            git pull --rebase
+            git pull --rebase -X theirs  # our freshly generated results win any README conflict
             git push
           fi
 
