@@ -1,0 +1,129 @@
+name: Daily forecast
+
+# Ingest -> score past forecasts -> retrain + gate (weekly) -> forecast tomorrow -> drift report -> publish.
+# MLflow (registry + runs) and the forecast log are kept between runs as a release asset; a new champion triggers a
+# new API image on GitHub Container Registry.
+on:
+  schedule:
+    - cron: "13 7 * * *" # 07:13 UTC = 02:13 EST, after the previous day's IESO data is complete
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_retrain:
+        description: "Retrain now (the promotion gate still applies)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # save state as a release asset and commit README results
+  packages: write # push the API image to ghcr.io
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/dvskaff/ontario-demand-api
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Test before touching real data
+        run: pytest -q
+
+      - name: Restore MLflow registry and forecast log from the last run
+        run: |
+          mkdir -p state
+          if gh release download state --pattern "state.tar.zst" --dir state; then
+            tar -I zstd -xf state/state.tar.zst -C state && rm state/state.tar.zst
+            ls -la state
+          else
+            echo "No saved state yet: this run trains and registers the first model."
+          fi
+
+      - name: Run the pipeline
+        id: run
+        run: python -m demand.pipeline
+        env:
+          PYTHONPATH: src
+          DEMAND_FORCE_RETRAIN: ${{ inputs.force_retrain && '1' || '' }}
+
+      - name: Save state for the next run
+        run: |
+          tar -I "zstd -T0 -10" -cf state.tar.zst -C state .
+          ls -lh state.tar.zst
+          gh release view state > /dev/null 2>&1 || gh release create state --latest=false \
+            --title "Pipeline state (updated daily)" \
+            --notes "MLflow database + artifacts (every model version) and the log of every issued forecast."
+          gh release upload state state.tar.zst --clobber
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Does the image for this champion exist?
+        id: image
+        run: |
+          TAG="v${{ steps.run.outputs.model_version }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"; echo "$IMAGE:$TAG already published"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build, smoke-test and push the API image
+        if: steps.image.outputs.build == 'true'
+        run: |
+          docker build -t "$IMAGE:${{ steps.image.outputs.tag }}" -t "$IMAGE:latest" .
+          docker run -d --name api -p 8000:8000 "$IMAGE:latest"
+          for i in $(seq 30); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf localhost:8000/forecast/example \
+            | curl -sf -X POST localhost:8000/forecast -H 'Content-Type: application/json' -d @- > forecast.json
+          python -c "import json; h=json.load(open('forecast.json'))['hours']; assert len(h)==24; print('API OK:', h[0])"
+          docker push "$IMAGE:${{ steps.image.outputs.tag }}"
+          docker push "$IMAGE:latest"
+
+      - name: Commit README results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if ! git diff --staged --quiet; then
+            git commit -m "Forecast for $(python -c 'import json;print(json.load(open("site/results.json"))["target_day"])')"
+            git pull --rebase
+            git push
+          fi
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
