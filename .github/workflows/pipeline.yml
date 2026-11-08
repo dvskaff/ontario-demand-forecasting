@@ -59,6 +59,10 @@ jobs:
             echo "No saved state yet: this run trains and registers the first model."
           fi
 
+      # ONNX Runtime compiled to WebAssembly, so the what-if page runs the champion model in the browser.
+      - name: Get the browser model runtime (ONNX Runtime Web, from npm)
+        run: bash scripts/fetch_web_runtime.sh
+
       - name: Run the pipeline
         id: run
         run: python -m demand.pipeline
