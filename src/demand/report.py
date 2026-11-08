@@ -233,7 +233,8 @@ def build_site(cfg: Config, frame, fc, scored, daily, run: dict) -> dict:
   <p>An hourly forecast of tomorrow's Ontario electricity demand with an 80% prediction interval, retrained, checked
   and served automatically: LightGBM quantile models tracked in an MLflow registry, exported to ONNX, served by a
   FastAPI container, and monitored for accuracy and drift. Updated every day from IESO data.</p>
-  <a class="btn" href="{cfg.repo_url}">Code on GitHub</a><a class="btn" href="api.html">API reference</a><a class="btn" href="drift.html">Drift report</a>
+  <a class="btn" href="whatif.html">What if it's warmer or colder?</a><a class="btn" href="api.html">API reference</a><a class="btn" href="drift.html">Drift report</a>
+  <a class="btn" href="{cfg.repo_url}">Code on GitHub</a>
 </div></header>
 <main>
 <div class="cards">{cards}</div>
@@ -244,6 +245,8 @@ the weather forecast for that day. Grey shows earlier forecasts as they were iss
 {_div(fig_forecast(frame, fc, scored))}
 <details><summary>Hourly forecast for {run["target_day"]}</summary>
 {_table(["Hour ending (EST)", "Temperature", "Low (p10)", "Forecast (p50)", "High (p90)"], fc_rows)}</details>
+<p><b><a href="whatif.html">What if it's warmer or colder?</a></b> Shift tomorrow's temperatures and watch the forecast
+respond, with the champion model running in your browser.</p>
 </section>
 
 <section><h2>How accurate is it?</h2>

@@ -46,6 +46,8 @@ class Config:
         default_factory=lambda: _env_path("DEMAND_BUNDLE_DIR", ROOT / "serving" / "model")
     )
     readme_path: Path = field(default_factory=lambda: _env_path("DEMAND_README", ROOT / "README.md"))
+    # ONNX Runtime Web for the weather what-if page (fetched from npm by scripts/fetch_web_runtime.sh)
+    vendor_dir: Path = field(default_factory=lambda: _env_path("DEMAND_VENDOR_DIR", ROOT / "web" / "vendor"))
 
     model_name: str = "ontario-demand"
     repo_url: str = "https://github.com/dvskaff/ontario-demand-forecasting"

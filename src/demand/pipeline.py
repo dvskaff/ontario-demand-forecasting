@@ -224,6 +224,14 @@ def run(cfg: Config) -> dict:
     from .report import build_site
 
     summary = build_site(cfg, frame, fc, scored, daily, run_info)
+    # Weather what-if: the champion's ONNX models run in the visitor's browser on shifted temperatures
+    from plotly.offline import get_plotlyjs_version
+
+    from . import whatif
+
+    scenario = whatif.export(cfg, frame, target, champ, fc)
+    runtime = whatif.copy_runtime(cfg.vendor_dir, cfg.site_dir)
+    whatif.write_page(cfg.site_dir, scenario, runtime, cfg.repo_url, cfg.fixture, get_plotlyjs_version())
     if not cfg.fixture:
         update_readme(cfg.readme_path, summary)
     registry.write_json(cfg.state_dir / "last_run.json", run_info)

@@ -6,8 +6,9 @@
 ![ONNX](https://img.shields.io/badge/ONNX%20Runtime-1.31-lightgrey) ![FastAPI](https://img.shields.io/badge/FastAPI-0.162-teal)
 ![Docker](https://img.shields.io/badge/image-ghcr.io-2496ED)
 
-**Live dashboard: https://dvskaff.github.io/ontario-demand-forecasting/** ·
-**API reference: https://dvskaff.github.io/ontario-demand-forecasting/api.html**
+* **Dashboard:** [tomorrow's forecast, updated daily](https://dvskaff.github.io/ontario-demand-forecasting/)
+* **What-if:** [make tomorrow warmer or colder](https://dvskaff.github.io/ontario-demand-forecasting/whatif.html)
+* **API:** [reference for the forecast API](https://dvskaff.github.io/ontario-demand-forecasting/api.html)
 
 How much electricity will Ontario need tomorrow, hour by hour, and how sure are we? This project is an end-to-end
 ML system that answers that every day from public IESO data. It covers training, a model registry, a promotion
@@ -23,6 +24,10 @@ gate, serving and monitoring, all automated with GitHub Actions:
   Registry whenever the champion changes.
 * **Monitoring:** every issued forecast is scored once the day is over, which gives the live error. Evidently checks
   input drift against the same weeks a year earlier, and a jump in live error triggers an early retrain.
+* **What-if in the browser:** the [weather what-if page](https://dvskaff.github.io/ontario-demand-forecasting/whatif.html)
+  runs the champion's ONNX models with ONNX Runtime Web. Move the slider and tomorrow's temperatures shift by up to
+  ±10 °C; the page rebuilds the temperature features (the same formulas as training, checked by the tests) and
+  forecasts again, with the 80% interval.
 
 ## Results
 
@@ -49,6 +54,23 @@ _*Backtest coverage is before the conformal calibration of the interval; the liv
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    IESO["IESO hourly demand"] --> ING["Ingest + checks"]
+    WX["Open-Meteo temperatures<br/>3 cities, weighted"] --> ING
+    ING --> FEAT["Shared features<br/>no leakage"]
+    FEAT --> MON["Monitor<br/>live error, drift"]
+    MON -->|"weekly or<br/>error alert"| TRAIN["Challenger<br/>backtest + gate"]
+    TRAIN --> REG[("MLflow registry<br/>champion alias")]
+    REG --> ONNX["ONNX export<br/>parity check"]
+    ONNX --> FC["Next-day forecast<br/>p10 / p50 / p90"]
+    ONNX --> API["FastAPI image<br/>on GHCR"]
+    ONNX --> WHATIF["What-if page<br/>ONNX Runtime Web"]
+    FC --> SITE["Dashboard<br/>+ README results"]
+```
+
+<details><summary>Every step in detail</summary>
+
 ```
 IESO hourly demand (EST, public CSV) ─┐
 Open-Meteo temperatures (3 cities,   ─┤  src/demand/ingest.py      range checks, missing-hour count
@@ -65,8 +87,10 @@ Open-Meteo temperatures (3 cities,   ─┤  src/demand/ingest.py      range che
                                         ▼
                      forecast next day with the champion (ONNX Runtime) ─► forecast log
                                         ▼
-       Evidently drift report · dashboard + API reference (GitHub Pages) · model bundle ─► Docker image (GHCR)
+       Evidently drift report · dashboard + API reference + what-if page (GitHub Pages) · model bundle ─► Docker image (GHCR)
 ```
+
+</details>
 
 ### API
 
@@ -93,7 +117,9 @@ code: no LightGBM, MLflow or training code.
 ```
 src/demand/   config · ingest · features (shared with the API) · model (quantile LightGBM, backtest, ONNX)
               registry (MLflow) · monitor (live scoring, Evidently drift) · pipeline · report · readme
+              whatif (exports the champion and tomorrow's features for the in-browser what-if page)
               fixture.py: SYNTHETIC demand/weather for tests (pages built from it say so)
+scripts/      fetch_web_runtime.sh: fetches ONNX Runtime Web from npm for the what-if page
 serving/      app/main.py (FastAPI) · requirements.txt (API image only)
 Dockerfile    the API image
 tests/        no-leakage and training/serving feature parity, ingestion, models + ONNX parity, API, multi-day runs

@@ -48,6 +48,9 @@ def test_daily_runs_retrain_gate_and_monitoring(cfg, monkeypatch):
     page = (cfg.site_dir / "index.html").read_text()
     assert "SYNTHETIC TEST DATA" in page and (cfg.site_dir / "drift.html").exists()
     assert (cfg.site_dir / "openapi.json").exists()
+    assert (cfg.site_dir / "whatif.html").exists() and 'href="whatif.html"' in page
+    scenario = json.loads((cfg.site_dir / "data" / "whatif.json").read_text())
+    assert scenario["model_version"] == "3" and (cfg.site_dir / "model" / "p50.onnx").exists()
 
     summary = json.loads((cfg.site_dir / "results.json").read_text())
     shutil.copy(ROOT / "README.md", cfg.readme_path)
