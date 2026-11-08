@@ -34,9 +34,9 @@ gate, serving and monitoring, all automated with GitHub Actions:
 Rewritten automatically after every run.
 
 <!-- RESULTS:START -->
-_IESO demand through 2026-11-07 · champion model v1 (data through 2026-11-05) · last run 2026-11-08 20:38 UTC_
+_IESO demand through 2026-11-07 · champion model v1 (data through 2026-11-05) · last run 2026-11-08 20:41 UTC_
 
-**Next-day forecast (2026-11-08):** peak 17,265 MW at hour ending 18:00 EST (80% interval 16,428–17,574 MW)
+**Next-day forecast (2026-11-08):** peak 17,255 MW at hour ending 18:00 EST (80% interval 16,434–17,574 MW)
 
 | Accuracy | MAPE | Daily peak error | 80% interval coverage* |
 |---|---|---|---|
