@@ -34,20 +34,20 @@ gate, serving and monitoring, all automated with GitHub Actions:
 Rewritten automatically after every run.
 
 <!-- RESULTS:START -->
-_IESO demand through 2026-11-19 · champion model v3 (data through 2026-11-15) · last run 2026-11-20 16:11 UTC_
+_IESO demand through 2026-11-20 · champion model v3 (data through 2026-11-15) · last run 2026-11-21 15:23 UTC_
 
-**Next-day forecast (2026-11-20):** peak 17,100 MW at hour ending 18:00 EST (80% interval 17,009–17,982 MW)
+**Next-day forecast (2026-11-21):** peak 16,871 MW at hour ending 19:00 EST (80% interval 16,077–17,396 MW)
 
 | Accuracy | MAPE | Daily peak error | 80% interval coverage* |
 |---|---|---|---|
 | Backtest, LightGBM quantile (12 monthly folds) | 2.88% | 2.67% | 62% |
 | Baseline: same hour last week | 6.52% | 6.00% | – |
 | Baseline: same hour yesterday | 4.68% | 3.92% | – |
-| **Live**, issued forecasts, last 14 days | 2.33% | 2.25% | 79% |
+| **Live**, issued forecasts, last 15 days | 2.30% | 2.35% | 80% |
 
 _*Backtest coverage is before the conformal calibration of the interval; the live row is after._
 
-**Registry:** 3 model version(s) in MLflow · **Inputs vs. same weeks last year (Evidently):** 6 of 6 columns shifted (this period was +4.4 °C vs. last year, with demand -2.5%)
+**Registry:** 3 model version(s) in MLflow · **Inputs vs. same weeks last year (Evidently):** 6 of 6 columns shifted (this period was +4.7 °C vs. last year, with demand -2.7%)
 
 **API image:** `docker run -p 8000:8000 ghcr.io/dvskaff/ontario-demand-api:latest`
 <!-- RESULTS:END -->
